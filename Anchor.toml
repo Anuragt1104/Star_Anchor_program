@@ -2,6 +2,9 @@
 seeds = true
 skip-lint = false
 
+[toolchain]
+anchor_version = "0.31.1"
+
 [programs.localnet]
 honorary_quote_fee = "11111111111111111111111111111111"
 
