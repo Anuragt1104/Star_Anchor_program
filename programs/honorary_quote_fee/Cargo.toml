@@ -1,0 +1,19 @@
+[package]
+name = "honorary_quote_fee"
+version = "0.1.0"
+description = "Honorary quote-only fee position for DAMM v2 with 24h distribution crank"
+edition = "2021"
+
+[lib]
+name = "honorary_quote_fee"
+crate-type = ["cdylib", "lib"]
+
+[features]
+no-entrypoint = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = "0.30.1"
+anchor-spl = { version = "0.30.1", features = ["token", "associated_token"] }
+solana-program = "1.16.16"

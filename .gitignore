@@ -1,0 +1,24 @@
+# Rust / Cargo build artifacts
+target/
+target/idl/
+target/types/
+
+# Anchor artifacts
+.anchor/
+Anchor.toml.lock
+
+# Node & JS
+node_modules/
+
+# Environment files
+.env
+
+# Local test validator ledger
+test-ledger/
+
+# Local keypairs and sensitive keys
+keys/
+
+# macOS finder files
+.DS_Store
+migrations/.DS_Store
