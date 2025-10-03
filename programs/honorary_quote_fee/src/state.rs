@@ -10,6 +10,7 @@ impl PolicyStatus {
 }
 
 #[account]
+#[derive(InitSpace)]
 #[repr(C)]
 pub struct Policy {
     pub authority: Pubkey,
@@ -40,6 +41,7 @@ impl Policy {
 }
 
 #[account]
+#[derive(InitSpace)]
 #[repr(C)]
 pub struct HonoraryPosition {
     pub policy: Pubkey,
@@ -51,6 +53,7 @@ impl HonoraryPosition {
 }
 
 #[account]
+#[derive(InitSpace)]
 #[repr(C)]
 pub struct DistributionProgress {
     pub policy: Pubkey,

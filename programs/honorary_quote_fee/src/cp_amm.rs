@@ -15,6 +15,7 @@ use crate::{
     state::{HonoraryPosition, HONORARY_POSITION_SEED},
 };
 
+#[allow(dead_code)]
 pub enum CollectFeeMode {
     Both,
     OnlyBase,
