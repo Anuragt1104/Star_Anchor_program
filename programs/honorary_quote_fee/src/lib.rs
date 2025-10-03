@@ -225,6 +225,10 @@ pub mod honorary_quote_fee {
         ctx: Context<CrankQuoteFeeDistribution>,
         params: CrankQuoteFeeParams,
     ) -> Result<()> {
+        // Work around lifetime issues by transmuting the context
+        let ctx: Context<'_, '_, '_, '_, CrankQuoteFeeDistribution<'_>> = unsafe {
+            std::mem::transmute(ctx)
+        };
         let clock = Clock::get()?;
         let now_ts = clock.unix_timestamp;
         require!(now_ts >= 0, HonoraryQuoteFeeError::InvalidTimestamp);
@@ -312,7 +316,7 @@ pub mod honorary_quote_fee {
 
         let investors = collect_investors(
             now_ts as u64,
-            &ctx.remaining_accounts,
+            ctx.remaining_accounts,
             policy.quote_mint,
             policy.pool,
         )?;
