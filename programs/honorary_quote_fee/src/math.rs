@@ -7,7 +7,9 @@ pub fn mul_div_floor_u128(a: u128, b: u128, denominator: u128) -> Result<u128> {
     let product = a
         .checked_mul(b)
         .ok_or(HonoraryQuoteFeeError::ArithmeticOverflow)?;
-    Ok(product / denominator)
+    Ok(product
+        .checked_div(denominator)
+        .ok_or(HonoraryQuoteFeeError::ArithmeticOverflow)?)
 }
 
 pub fn u128_to_u64(value: u128) -> Result<u64> {

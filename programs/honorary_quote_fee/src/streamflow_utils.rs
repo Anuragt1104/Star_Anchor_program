@@ -20,7 +20,11 @@ pub fn collect_investors<'info>(
         accounts.len() % 2 == 0,
         HonoraryQuoteFeeError::InvalidInvestorAccount
     );
-    let mut investors = Vec::with_capacity(accounts.len() / 2);
+    let half = accounts
+        .len()
+        .checked_div(2)
+        .ok_or(HonoraryQuoteFeeError::ArithmeticOverflow)?;
+    let mut investors = Vec::with_capacity(half);
 
     for (chunk_idx, chunk) in accounts.chunks(2).enumerate() {
         let stream_account = &chunk[0];
@@ -63,16 +67,23 @@ pub fn collect_investors<'info>(
             HonoraryQuoteFeeError::InvestorAtaOwnerMismatch
         );
 
+        let index_mul = (chunk_idx as u64)
+            .checked_mul(2)
+            .ok_or(HonoraryQuoteFeeError::ArithmeticOverflow)?
+            .checked_add(1)
+            .ok_or(HonoraryQuoteFeeError::ArithmeticOverflow)?;
+        let idx_usize: usize = usize::try_from(index_mul)
+            .map_err(|_| error!(HonoraryQuoteFeeError::ArithmeticOverflow))?;
         investors.push(InvestorEntry {
             locked_amount: locked,
-            token_account_index: chunk_idx * 2 + 1,
+            token_account_index: idx_usize,
         });
     }
 
     Ok(investors)
 }
 
-pub fn load_stream_contract(account_info: &AccountInfo) -> Result<Contract> {
+pub fn load_stream_contract(account_info: &AccountInfo<'_>) -> Result<Contract> {
     let data = account_info.try_borrow_data()?;
     Contract::try_from_slice(&data)
         .map_err(|_| error!(HonoraryQuoteFeeError::InvalidInvestorAccount))
@@ -95,6 +106,9 @@ pub fn eligible_share_bps(locked_total: u128, y0: u64, max_share_bps: u16) -> u1
         return 0;
     }
 
-    let ratio = locked_total.saturating_mul(10_000u128) / (y0 as u128);
+    let ratio = locked_total
+        .saturating_mul(10_000u128)
+        .checked_div(y0 as u128)
+        .unwrap_or(0);
     ratio.min(max_share_bps as u128) as u16
 }

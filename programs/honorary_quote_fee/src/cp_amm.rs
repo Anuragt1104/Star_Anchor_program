@@ -96,11 +96,9 @@ pub fn invoke_claim_position_fee<'info>(
         data: CLAIM_POSITION_FEE_DISCRIMINATOR.to_vec(),
     };
 
-    let signer_seeds: &[&[u8]] = &[&[
-        HONORARY_POSITION_SEED,
-        policy_key.as_ref(),
-        &[honorary_position.bump],
-    ]];
+    let bump_seed = [honorary_position.bump];
+    let seeds: [&[u8]; 3] = [HONORARY_POSITION_SEED, policy_key.as_ref(), &bump_seed];
+    let signer_seeds: &[&[&[u8]]] = &[&seeds];
 
     let account_infos = vec![
         pool_authority.clone(),
