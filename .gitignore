@@ -1,24 +1,25 @@
-# Rust / Cargo build artifacts
+# Build outputs
 target/
-target/idl/
-target/types/
+!target/deploy/*.so
+!target/deploy/*-keypair.json
+!target/idl/*.json
 
-# Anchor artifacts
-.anchor/
-Anchor.toml.lock
+# Test artifacts
+test-ledger/
+*.log
+*.pid
 
-# Node & JS
+# Dependencies
 node_modules/
 
-# Environment files
-.env
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# Local test validator ledger
-test-ledger/
-
-# Local keypairs and sensitive keys
-keys/
-
-# macOS finder files
+# OS
 .DS_Store
-migrations/.DS_Store
+
+# Temp
+*.tmp

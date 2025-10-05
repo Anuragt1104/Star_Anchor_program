@@ -1,226 +1,227 @@
-# Honorary Quote Fee Program
+# Honorary Quote Fee Distribution
 
-A Solana program that implements honorary quote fee distribution for Meteora DAMM (Dynamic Automated Market Maker) pools with Streamflow vesting integration.
+Solana program for distributing quote-only fees from Meteora DAMM pools to Streamflow vesting investors.
 
 ## Overview
 
-This program allows pool creators to set up honorary positions that collect quote-only fees from DAMM pools and distribute them to investors based on their locked tokens in Streamflow vesting contracts. The system includes:
+This program enables honorary positions that collect quote fees from CP-AMM pools and distribute them proportionally to investors based on their locked tokens in Streamflow vesting contracts. The distribution runs on a 24-hour cycle with configurable caps and minimum payouts.
 
-- **Policy Management**: Configure fee distribution parameters for quote-only pools
-- **Honorary Positions**: Special positions that collect and distribute fees
-- **Fee Distribution**: Proportional distribution to investors based on locked amounts
-- **Streamflow Integration**: Automatic investor detection from vesting contracts
-- **Daily Limits**: Configurable daily caps and minimum payout thresholds
+## Setup
 
-## Architecture
-
-### Components
-
-1. **Policy Account**: Stores distribution parameters and pool configuration
-2. **Honorary Position**: PDA that holds collected fees and executes distributions
-3. **Distribution Progress**: Tracks daily distribution state and progress
-4. **Treasury Accounts**: Hold collected fees before distribution
-
-### Key Features
-
-- **Quote-Only Pools**: Only distributes quote token fees (no base token fees)
-- **Proportional Distribution**: Investors receive fees proportional to their locked amounts
-- **Daily Cycling**: Distributions happen daily with configurable caps
-- **Minimum Thresholds**: Ensures meaningful payouts to investors
-- **Creator Share**: Configurable split between investors and pool creator
-
-## End-to-End Testing
-
-The test suite demonstrates complete flows against CP-AMM and Streamflow on a local validator.
-
-### Test Coverage
-
-1. **Policy Initialization**
-   - Setup distribution parameters
-   - Configure pool and treasury accounts
-   - Validate parameter constraints
-
-2. **Honorary Position Configuration**
-   - Create position NFT and accounts
-   - Setup treasury and fee checking accounts
-   - Enable fee collection
-
-3. **Fee Accumulation**
-   - Simulate trading fees from CP-AMM
-   - Monitor treasury balance changes
-
-4. **Fee Distribution**
-   - Parse Streamflow vesting contracts
-   - Calculate proportional shares
-   - Execute token transfers
-   - Handle daily caps and minimum payouts
-
-### Running Tests
-
-#### Prerequisites
+### Prerequisites
 
 ```bash
-# Install dependencies
-npm install
+# Solana CLI
+sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
 
-# Install Solana CLI and Anchor
-curl -sSfL https://install.solana.com | sh
+# Anchor CLI
 cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
-avm install latest
-avm use latest
+avm install 0.31.1
+avm use 0.31.1
 ```
 
-#### Local Testing
+### Build
 
 ```bash
-# Run comprehensive Rust unit tests with detailed output
-cargo test -p honorary_quote_fee -- --nocapture --test-threads=1
+anchor build
+```
 
-# Run specific test category
-cargo test -p honorary_quote_fee math -- --nocapture
-cargo test -p honorary_quote_fee payout_plan -- --nocapture
-cargo test -p honorary_quote_fee integration -- --nocapture
+### Testing
 
-# Start local validator with programs
-npm run validator
+```bash
+# Run Rust unit tests
+cargo test -p honorary_quote_fee -- --nocapture
 
-# In another terminal, run tests
+# Start local validator with CP-AMM and Streamflow
+./scripts/start-validator.sh
+
+# Run integration tests (in another terminal)
+npm install
 npm test
-
-# Or run end-to-end test with validator
-npm run test:e2e
 ```
 
-**Rust Test Results:**
-```
-running 24 tests
-
-✅ 4 Math operation tests - All passed
-✅ 2 Share calculation tests - All passed
-✅ 13 Payout distribution tests - All passed
-✅ 2 Integration scenario tests - All passed
-✅ 1 Requirements verification test - All passed
-
-test result: ok. 24 passed; 0 failed; 0 ignored
-```
-
-#### Test Structure
-
-```
-programs/honorary_quote_fee/src/
-└── tests.rs              # Comprehensive Rust unit tests (24 tests)
-
-tests/
-├── helpers/
-│   └── setup.ts          # Test environment utilities
-└── honorary_quote_fee.ts # End-to-end test suite
-
-TESTING.md                # Detailed test documentation
-```
-
-### Test Scenarios
-
-1. **Complete Flow Test**
-   - Initialize policy for quote-only pool
-   - Configure honorary position
-   - Simulate fee accumulation
-   - Execute distribution to investors
-   - Verify proportional payouts
-
-2. **Integration Tests**
-   - Multiple day distributions
-   - Daily cap enforcement
-   - Minimum payout thresholds
-   - Streamflow contract parsing
-
-3. **Error Handling**
-   - Invalid policy parameters
-   - Unauthorized operations
-   - Insufficient funds
-   - Pool validation failures
-
-## Program Interface
+## Program Structure
 
 ### Instructions
 
-#### Initialize Policy
+**1. `initialize_policy`**
+- Creates distribution policy for a DAMM pool
+- Validates quote-only configuration
+- Sets investor share percentage, caps, and thresholds
+
+**2. `configure_honorary_position`**
+- Sets up PDA-owned position
+- Creates quote treasury and base fee check accounts
+- Links position NFT to policy
+
+**3. `crank_quote_fee_distribution`**
+- Claims fees from CP-AMM position via CPI
+- Reads Streamflow contracts from remaining accounts
+- Distributes proportionally to investors
+- Routes remainder to creator
+- Supports pagination for large investor lists
+
+### Accounts
+
+**Policy** (`seeds = ["policy", damm_pool]`)
+- Stores pool configuration and distribution parameters
+- References pool authority and vaults
+- Tracks position and treasury accounts
+
+**HonoraryPosition** (`seeds = ["honorary", policy]`)
+- PDA that owns the position NFT
+- Authority for treasury accounts
+- Signs fee distribution transfers
+
+**DistributionProgress** (`seeds = ["progress", damm_pool]`)
+- Tracks current day's distribution state
+- Manages pagination cursor
+- Stores carry-forward amounts
+
+## Wiring
+
+### Integration with CP-AMM
+
 ```rust
-initialize_policy(params: InitializePolicyParams)
+// 1. Policy init reads pool account
+let pool = DammPoolAccount::deserialize(&pool_data)?;
+assert_quote_only_pool(&pool, quote_mint)?;
+
+// 2. Crank claims fees via CPI
+cp_amm::invoke_claim_position_fee(
+    &cp_amm_program,
+    &pool,
+    &position,
+    &base_vault,  // Must be unchanged
+    &quote_vault, // Fee destination
+    ...
+)?;
 ```
-Creates a new fee distribution policy for a DAMM pool.
 
-**Parameters:**
-- `investor_fee_share_bps`: Basis points for investor share (0-10000)
-- `y0`: Minimum locked amount threshold
-- `daily_cap_quote`: Maximum daily distribution
-- `min_payout_lamports`: Minimum individual payout
+### Integration with Streamflow
 
-#### Configure Honorary Position
 ```rust
-configure_honorary_position()
+// Remaining accounts: [stream1, ata1, stream2, ata2, ...]
+for chunk in remaining_accounts.chunks(2) {
+    let stream = Stream::deserialize(&chunk[0].data)?;
+    let locked = calculate_locked_amount(&stream, now)?;
+    investors.push(InvestorEntry { locked, ata: chunk[1] });
+}
 ```
-Sets up the honorary position and treasury accounts.
 
-#### Crank Quote Fee Distribution
+### Fee Distribution Logic
+
 ```rust
-crank_quote_fee_distribution(params: CrankQuoteFeeParams)
+// Compute eligible share based on total locked
+let locked_ratio = total_locked / Y0;
+let eligible_share_bps = min(investor_fee_share_bps, locked_ratio * 10000);
+
+// Target distribution
+let investor_target = claimed_fees * eligible_share_bps / 10000;
+let investor_target = min(investor_target, daily_cap);
+
+// Pro-rata distribution
+for investor in investors {
+    let payout = (investor_target * investor.locked) / total_locked;
+    if payout >= min_payout {
+        transfer(treasury, investor.ata, payout)?;
+    }
+}
+
+// Creator gets remainder
+let creator_amount = claimed_fees - distributed;
+transfer(treasury, creator_ata, creator_amount)?;
 ```
-Executes fee collection and distribution.
 
-**Parameters:**
-- `expected_page_cursor`: Pagination cursor
-- `max_page_cursor`: Maximum pages to process
-- `is_last_page`: Whether this completes the day's distribution
+## PDAs
 
-## Building and Deployment
+| Account | Seeds | Description |
+|---------|-------|-------------|
+| Policy | `["policy", damm_pool]` | Distribution configuration |
+| HonoraryPosition | `["honorary", policy]` | Fee collector and distributor |
+| DistributionProgress | `["progress", damm_pool]` | Daily distribution state |
 
+All PDAs use the Honorary Quote Fee program ID as the program_id parameter.
+
+## Policies
+
+### Distribution Parameters
+
+- **investor_fee_share_bps**: Maximum investor share (0-10000 basis points)
+- **y0**: Locked amount threshold for full investor share
+- **daily_cap_quote**: Maximum distribution per day (0 = no cap)
+- **min_payout_lamports**: Minimum payout per investor
+
+### Eligibility
+
+Investors must have active Streamflow vesting contracts with:
+- Mint matching the policy's quote mint
+- Non-zero locked amount at distribution time
+- Valid recipient token account
+
+### Distribution Schedule
+
+1. **Day Open**: First crank after 24h opens new day
+2. **Pages**: Process investors in batches (pagination)
+3. **Day Close**: Last page distributes remainder to creator
+4. **Next Day**: Cannot reopen until 24h elapsed
+
+## Failure Modes
+
+### Deterministic Failures (Transaction Reverts)
+
+| Error | Condition | Resolution |
+|-------|-----------|------------|
+| `BaseFeeDetected` | Base fee > 0 in treasury | Wait for quote-only fees |
+| `DayNotReady` | < 24h since last close | Wait for timer |
+| `UnexpectedPageCursor` | Cursor mismatch | Use correct cursor |
+| `InvalidInvestorShare` | Share > 10000 bps | Fix policy params |
+| `Unauthorized` | Wrong authority | Use policy authority |
+| `HonoraryPositionNotReady` | Position not configured | Call configure_honorary_position |
+
+### Pool Validation Failures
+
+- **Non-quote fees**: Policy creation fails if pool allows base fees
+- **Partner pool**: Fails if pool has non-default partner
+- **Mint mismatch**: Position NFT must match pool configuration
+
+### Streamflow Parsing
+
+- **Invalid mint**: Contracts with wrong mint are skipped
+- **Deserialization error**: Invalid contracts are skipped
+- **Zero locked**: Investors with 0 locked amount receive 0
+
+### Dust Handling
+
+Payouts below `min_payout_lamports` are:
+1. Set to 0 for that investor
+2. Accumulated in `progress.carry_quote`
+3. Added to next distribution attempt
+4. Routed to creator on day close if share = 0
+
+## Events
+
+- **HonoraryPositionInitialized**: Position setup complete
+- **QuoteFeesClaimed**: Fees collected from CP-AMM
+- **InvestorPayoutPage**: Page processed, amounts distributed
+- **CreatorPayoutDayClosed**: Day closed, remainder to creator
+
+## Test Coverage
+
+The test suite includes:
+- 24 Rust unit tests covering math, distribution logic, and edge cases
+- Integration tests with CP-AMM and Streamflow on local validator
+- Scenarios: partial locks, all unlocked, dust, caps, pagination
+
+Run tests:
 ```bash
-# Build the program
-anchor build
+# Unit tests
+cargo test -p honorary_quote_fee
 
-# Deploy to localnet
-anchor deploy
-
-# Test on localnet
-anchor test
+# Integration tests  
+./scripts/start-validator.sh  # Terminal 1
+npm test                        # Terminal 2
 ```
-
-## Dependencies
-
-- **Anchor**: Solana framework for Rust programs
-- **Meteora DAMM**: Decentralized exchange protocol
-- **Streamflow**: Token vesting and locking protocol
-- **SPL Token**: Solana token standard
-
-## Security Considerations
-
-- **Access Control**: Only authorized accounts can modify policies
-- **Validation**: Extensive input validation and pool verification
-- **Fee Limits**: Daily caps prevent excessive distributions
-- **Auditability**: All distributions are logged with events
-
-## Development
-
-### Project Structure
-```
-programs/honorary_quote_fee/
-├── src/
-│   ├── lib.rs           # Main program logic
-│   ├── cp_amm.rs        # CP-AMM integration
-│   ├── streamflow_utils.rs # Streamflow parsing
-│   ├── state.rs         # Account structures
-│   ├── errors.rs        # Error definitions
-│   └── events.rs        # Event logging
-├── tests/               # Test suite
-└── Cargo.toml          # Dependencies
-```
-
-### Key Components
-
-- **CP-AMM Integration**: Handles fee claiming from DAMM positions
-- **Streamflow Utils**: Parses vesting contracts to identify investors
-- **Math Utils**: Safe arithmetic for fee calculations
-- **State Management**: Account structures with proper constraints
 
 ## License
 
