@@ -30,7 +30,7 @@ use state::{
 };
 pub use streamflow_utils::{collect_investors, eligible_share_bps, InvestorEntry};
 
-declare_id!("11111111111111111111111111111111");
+declare_id!("7YupTAYp9uHuv5UJdGGVfX1dr1WNd71ezW43r3UxbxMk");
 
 pub const DAY_SECONDS: i64 = 86_400;
 pub const MAX_BASIS_POINTS: u16 = 10_000;
