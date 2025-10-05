@@ -1,0 +1,8 @@
+[target.bpfel-unknown-unknown]
+rustflags = ["--cfg", "getrandom_backend=\"custom\""]
+
+[target.bpfeb-unknown-unknown]
+rustflags = ["--cfg", "getrandom_backend=\"custom\""]
+
+[target.sbpf-solana-solana]
+rustflags = ["--cfg", "getrandom_backend=\"custom\""]

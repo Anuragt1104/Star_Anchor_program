@@ -2,8 +2,11 @@
 seeds = true
 skip-lint = false
 
+[toolchain]
+anchor_version = "0.31.1"
+
 [programs.localnet]
-honorary_quote_fee = "11111111111111111111111111111111"
+honorary_quote_fee = "7YupTAYp9uHuv5UJdGGVfX1dr1WNd71ezW43r3UxbxMk"
 
 [registry]
 url = "https://api.apr.dev"

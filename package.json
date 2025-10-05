@@ -1,0 +1,50 @@
+{
+  "name": "star_anchor_program",
+  "version": "1.0.0",
+  "description": "Honorary Quote Fee program for Meteora DAMM pools with Streamflow integration",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "mocha tests/**/*.ts --timeout 60000 --loader ts-node/esm",
+    "test:watch": "mocha tests/**/*.ts --timeout 60000 --loader ts-node/esm --watch",
+    "test:e2e": "./scripts/test-runner.sh",
+    "test:setup": "./scripts/test-runner.sh --setup-only",
+    "build": "anchor build",
+    "deploy": "anchor deploy",
+    "localnet": "solana-test-validator",
+    "validator": "solana-test-validator --reset --quiet",
+    "validator:real": "./scripts/start-validator.sh",
+    "test:quick": "npm run validator & sleep 5 && npm test && pkill -f solana-test-validator",
+    "test:unit": "cargo test -p honorary_quote_fee -- --nocapture --test-threads=1",
+    "test:all": "npm run test:unit && npm test",
+    "setup:programs": "mkdir -p programs/damm-v2 programs/streamflow && solana program dump 675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8 programs/damm-v2/damm_v2.so --url mainnet-beta && solana program dump strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m programs/streamflow/streamflow.so --url mainnet-beta"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.31.1",
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.95.3",
+    "bn.js": "^5.2.2",
+    "chai": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/bn.js": "^5.1.6",
+    "@types/chai": "^4.3.20",
+    "@types/mocha": "^10.0.10",
+    "mocha": "^10.8.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "type": "module",
+  "keywords": [
+    "solana",
+    "anchor",
+    "defi",
+    "amm",
+    "meteora",
+    "streamflow"
+  ],
+  "author": "Anurag Tiwari",
+  "license": "MIT"
+}
