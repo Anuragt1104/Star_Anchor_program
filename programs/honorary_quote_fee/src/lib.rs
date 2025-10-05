@@ -15,6 +15,9 @@ mod math;
 mod state;
 mod streamflow_utils;
 
+#[cfg(test)]
+mod tests;
+
 use cp_amm::{assert_quote_only_pool, CollectFeeMode};
 use errors::HonoraryQuoteFeeError;
 use events::{
@@ -25,7 +28,7 @@ use state::{
     DistributionProgress, HonoraryPosition, Policy, HONORARY_POSITION_SEED, POLICY_SEED,
     PROGRESS_SEED,
 };
-use streamflow_utils::{collect_investors, eligible_share_bps, InvestorEntry};
+pub use streamflow_utils::{collect_investors, eligible_share_bps, InvestorEntry};
 
 declare_id!("11111111111111111111111111111111");
 
@@ -467,18 +470,18 @@ pub mod honorary_quote_fee {
     }
 }
 
-struct InvestorPayoutPlan {
-    transfers: Vec<(u64, usize)>,
-    investor_count: u32,
-    share_bps: u16,
-    total_paid: u64,
-    target_investor_quote: u64,
-    carry_for_creator: u64,
-    carry_quote_after: u64,
+pub struct InvestorPayoutPlan {
+    pub transfers: Vec<(u64, usize)>,
+    pub investor_count: u32,
+    pub share_bps: u16,
+    pub total_paid: u64,
+    pub target_investor_quote: u64,
+    pub carry_for_creator: u64,
+    pub carry_quote_after: u64,
 }
 
 #[inline(never)]
-fn build_investor_payout_plan(
+pub fn build_investor_payout_plan(
     investors: Vec<InvestorEntry>,
     claimed_quote: u64,
     investor_distributed: u64,
@@ -632,10 +635,11 @@ pub extern "Rust" fn __getrandom_v03_custom(
 
     let mut offset = 0usize;
     while offset < len {
-        let remaining = len - offset;
+        let remaining = len.saturating_sub(offset);
         let copy_len = cmp::min(remaining, digest.len());
-        buf[offset..offset + copy_len].copy_from_slice(&digest[..copy_len]);
-        offset += copy_len;
+        let end = offset.saturating_add(copy_len);
+        buf[offset..end].copy_from_slice(&digest[..copy_len]);
+        offset = end;
 
         if offset < len {
             digest = hash(&digest).to_bytes();

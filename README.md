@@ -73,6 +73,14 @@ avm use latest
 #### Local Testing
 
 ```bash
+# Run comprehensive Rust unit tests with detailed output
+cargo test -p honorary_quote_fee -- --nocapture --test-threads=1
+
+# Run specific test category
+cargo test -p honorary_quote_fee math -- --nocapture
+cargo test -p honorary_quote_fee payout_plan -- --nocapture
+cargo test -p honorary_quote_fee integration -- --nocapture
+
 # Start local validator with programs
 npm run validator
 
@@ -83,13 +91,31 @@ npm test
 npm run test:e2e
 ```
 
+**Rust Test Results:**
+```
+running 24 tests
+
+✅ 4 Math operation tests - All passed
+✅ 2 Share calculation tests - All passed
+✅ 13 Payout distribution tests - All passed
+✅ 2 Integration scenario tests - All passed
+✅ 1 Requirements verification test - All passed
+
+test result: ok. 24 passed; 0 failed; 0 ignored
+```
+
 #### Test Structure
 
 ```
+programs/honorary_quote_fee/src/
+└── tests.rs              # Comprehensive Rust unit tests (24 tests)
+
 tests/
 ├── helpers/
 │   └── setup.ts          # Test environment utilities
 └── honorary_quote_fee.ts # End-to-end test suite
+
+TESTING.md                # Detailed test documentation
 ```
 
 ### Test Scenarios

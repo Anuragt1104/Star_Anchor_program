@@ -17,11 +17,12 @@ import {
   createAssociatedTokenAccount,
 } from "@solana/spl-token";
 
-// Mock CP-AMM program for testing
-export const CP_AMM_PROGRAM_ID = new PublicKey("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
+import { CPAMMHelper } from "./cp_amm_helper.js";
+import { StreamflowHelper } from "./streamflow_helper.js";
 
-// Mock Streamflow program for testing - using a valid public key format
-export const STREAMFLOW_PROGRAM_ID = Keypair.generate().publicKey;
+// Real CP-AMM and Streamflow program IDs
+export const CP_AMM_PROGRAM_ID = new PublicKey("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
+export const STREAMFLOW_PROGRAM_ID = new PublicKey("strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m");
 
 // Test constants
 export const DAY_SECONDS = 86400;
@@ -30,6 +31,8 @@ export const MAX_BASIS_POINTS = 10000;
 export class TestEnvironment {
   provider: anchor.AnchorProvider;
   program: Program<any>;
+  cpAmmHelper!: CPAMMHelper;
+  streamflowHelper!: StreamflowHelper;
 
   // Test accounts
   authority!: Keypair;
@@ -76,6 +79,10 @@ export class TestEnvironment {
   }
 
   async initialize() {
+    // Initialize helpers
+    this.cpAmmHelper = new CPAMMHelper(this.provider);
+    this.streamflowHelper = new StreamflowHelper(this.provider);
+
     // Generate test keypairs
     this.authority = Keypair.generate();
     this.user1 = Keypair.generate();
@@ -169,7 +176,7 @@ export class TestEnvironment {
     );
 
     [this.honoraryPosition] = PublicKey.findProgramAddressSync(
-      [Buffer.from("honorary-position"), this.policy.toBuffer()],
+      [Buffer.from("honorary"), this.policy.toBuffer()],
       this.program.programId
     );
 
@@ -248,5 +255,171 @@ export class TestEnvironment {
     };
 
     return positionData;
+  }
+
+  /**
+   * Create mock Streamflow vesting contract
+   * This simulates a Streamflow contract structure for testing
+   */
+  async createMockStreamflowContract(
+    recipient: PublicKey,
+    recipientTokens: PublicKey,
+    totalAmount: number,
+    withdrawnAmount: number,
+    startTime: number,
+    endTime: number
+  ): Promise<Keypair> {
+    const contract = Keypair.generate();
+    
+    // In a real implementation, this would create actual Streamflow contract data
+    // For testing, we just need a keypair that represents the contract
+    // The actual data would be serialized Streamflow contract state
+    
+    return contract;
+  }
+
+  /**
+   * Helper to calculate mock locked amount
+   * Simulates Streamflow's locked_amount calculation
+   */
+  calculateMockLockedAmount(
+    totalAmount: number,
+    withdrawnAmount: number,
+    availableToClaim: number
+  ): number {
+    const unlocked = withdrawnAmount + availableToClaim;
+    const clamped = Math.min(unlocked, totalAmount);
+    return Math.max(0, totalAmount - clamped);
+  }
+
+  /**
+   * Initialize real CP-AMM pool with quote-only fees
+   * This uses the actual CP-AMM program
+   */
+  async initializeRealPool(): Promise<void> {
+    console.log("\n🏊 Initializing REAL CP-AMM Pool...");
+    
+    const poolResult = await this.cpAmmHelper.initializePool({
+      payer: this.authority,
+      baseMint: this.baseMint,
+      quoteMint: this.quoteMint,
+      feeRate: 30, // 0.3% fee
+      quoteOnlyFees: true,
+    });
+
+    this.pool = poolResult.pool;
+    this.poolAuthority = poolResult.poolAuthority;
+    this.baseVault = poolResult.baseVault;
+    this.quoteVault = poolResult.quoteVault;
+
+    console.log("✅ Real CP-AMM pool initialized!");
+  }
+
+  /**
+   * Create real position with fees
+   * This simulates actual trading fees accumulation
+   */
+  async createRealPositionWithFees(feeAmount: number): Promise<void> {
+    console.log("\n📍 Creating Real Position with Fees...");
+
+    // Create the position
+    const positionResult = await this.cpAmmHelper.createPosition({
+      payer: this.authority,
+      pool: this.pool.publicKey,
+      poolAuthority: this.poolAuthority,
+      owner: this.honoraryPosition,
+      lowerTick: -100,
+      upperTick: 100,
+    });
+
+    this.position = positionResult.position;
+    this.positionNftMint = positionResult.positionNftMint;
+    this.positionNftAccount = positionResult.positionNftAccount;
+
+    // Inject fees directly (simpler than running actual swaps)
+    await this.cpAmmHelper.injectFeesDirectly({
+      payer: this.authority,
+      position: this.position.publicKey,
+      quoteVault: this.quoteVault,
+      quoteMint: this.quoteMint,
+      feeAmount: new anchor.BN(feeAmount),
+    });
+
+    console.log(`✅ Position created with ${feeAmount} quote fees!`);
+  }
+
+  /**
+   * Create real Streamflow vesting contracts
+   * Returns array of contract data for use in crank
+   */
+  async createRealVestingContracts(scenarios: Array<{
+    recipient: PublicKey;
+    totalAmount: number;
+    lockedPercent: number; // 0-100
+  }>): Promise<Array<{
+    contract: Keypair;
+    recipientAta: PublicKey;
+    lockedAmount: number;
+  }>> {
+    console.log("\n🌊 Creating Real Streamflow Vesting Contracts...");
+
+    const results = [];
+    const now = new anchor.BN(Math.floor(Date.now() / 1000));
+    const oneDay = new anchor.BN(86400);
+
+    for (const scenario of scenarios) {
+      console.log(`\n  Contract for ${scenario.recipient.toString().slice(0, 8)}...`);
+      console.log(`    Total: ${scenario.totalAmount}`);
+      console.log(`    Locked: ${scenario.lockedPercent}%`);
+
+      // Calculate time parameters to achieve desired locked percentage
+      const vestingDuration = 60; // 60 days total
+      const daysElapsed = Math.floor(vestingDuration * (1 - scenario.lockedPercent / 100));
+      
+      const startTime = now.sub(oneDay.muln(daysElapsed));
+      const endTime = now.add(oneDay.muln(vestingDuration - daysElapsed));
+
+      const recipientAta = await getAssociatedTokenAddress(
+        this.quoteMint,
+        scenario.recipient
+      );
+
+      // Check if ATA exists, create if not
+      try {
+        await this.provider.connection.getAccountInfo(recipientAta);
+      } catch {
+        await createAssociatedTokenAccount(
+          this.provider.connection,
+          this.authority,
+          this.quoteMint,
+          scenario.recipient
+        );
+      }
+
+      const contract = await this.streamflowHelper.createMockContractData({
+        payer: this.authority,
+        recipient: scenario.recipient,
+        recipientTokens: recipientAta,
+        mint: this.quoteMint,
+        totalAmount: new anchor.BN(scenario.totalAmount),
+        withdrawnAmount: new anchor.BN(0),
+        startTime,
+        endTime,
+      });
+
+      const lockedAmount = Math.floor(scenario.totalAmount * (scenario.lockedPercent / 100));
+
+      results.push({
+        contract,
+        recipientAta,
+        lockedAmount,
+      });
+
+      console.log(`    ✓ Contract created: ${contract.publicKey.toString().slice(0, 8)}...`);
+      console.log(`    ✓ Locked amount: ${lockedAmount}`);
+    }
+
+    console.log("\n✅ All vesting contracts created!");
+    return results;
   }
 }

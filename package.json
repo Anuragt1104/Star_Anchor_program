@@ -15,7 +15,11 @@
     "deploy": "anchor deploy",
     "localnet": "solana-test-validator",
     "validator": "solana-test-validator --reset --quiet",
-    "test:quick": "npm run validator & sleep 5 && npm test && pkill -f solana-test-validator"
+    "validator:real": "./scripts/start-validator.sh",
+    "test:quick": "npm run validator & sleep 5 && npm test && pkill -f solana-test-validator",
+    "test:unit": "cargo test -p honorary_quote_fee -- --nocapture --test-threads=1",
+    "test:all": "npm run test:unit && npm test",
+    "setup:programs": "mkdir -p programs/damm-v2 programs/streamflow && solana program dump 675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8 programs/damm-v2/damm_v2.so --url mainnet-beta && solana program dump strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m programs/streamflow/streamflow.so --url mainnet-beta"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.1",

@@ -53,6 +53,7 @@ impl HonoraryPosition {
 }
 
 #[account]
+#[derive(InitSpace)]
 #[repr(C)]
 pub struct DistributionProgress {
     pub policy: Pubkey,
