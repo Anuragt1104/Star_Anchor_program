@@ -223,6 +223,3 @@ cargo test -p honorary_quote_fee
 npm test                        # Terminal 2
 ```
 
-## License
-
-MIT
