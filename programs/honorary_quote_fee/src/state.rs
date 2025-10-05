@@ -53,17 +53,15 @@ impl HonoraryPosition {
 }
 
 #[account]
-#[derive(InitSpace)]
 #[repr(C)]
 pub struct DistributionProgress {
     pub policy: Pubkey,
-    pub day_start_ts: i64,
-    pub page_cursor: u32,
     pub claimed_quote: u64,
     pub investor_distributed: u64,
     pub carry_quote: u64,
+    pub day_start_ts: i64,
+    pub page_cursor: u32,
     pub day_open: bool,
-    pub bump: u8,
 }
 
 impl DistributionProgress {

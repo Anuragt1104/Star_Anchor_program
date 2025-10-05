@@ -25,7 +25,7 @@ use state::{
     DistributionProgress, HonoraryPosition, Policy, HONORARY_POSITION_SEED, POLICY_SEED,
     PROGRESS_SEED,
 };
-use streamflow_utils::{collect_investors, eligible_share_bps};
+use streamflow_utils::{collect_investors, eligible_share_bps, InvestorEntry};
 
 declare_id!("11111111111111111111111111111111");
 
@@ -47,19 +47,27 @@ pub mod honorary_quote_fee {
         require!(params.y0 > 0, HonoraryQuoteFeeError::InvalidY0);
 
         let policy = &mut ctx.accounts.policy;
-        let pool_data = ctx.accounts.damm_pool.try_borrow_data()?;
-        let mut pool_bytes: &[u8] = &pool_data;
-        let pool = DammPoolAccount::deserialize(&mut pool_bytes)
-            .map_err(|_| error!(HonoraryQuoteFeeError::InvalidPoolAccount))?;
+        let (pool_partner, pool_token_a_mint, pool_token_a_vault, pool_token_b_vault) = {
+            let pool_data = ctx.accounts.damm_pool.try_borrow_data()?;
+            let pool = DammPoolAccount::deserialize(&pool_data)
+                .ok_or_else(|| error!(HonoraryQuoteFeeError::InvalidPoolAccount))?;
 
-        assert_quote_only_pool(
-            &pool,
-            ctx.accounts.quote_mint.key(),
-            CollectFeeMode::OnlyQuote,
-        )?;
+            assert_quote_only_pool(
+                &pool,
+                ctx.accounts.quote_mint.key(),
+                CollectFeeMode::OnlyQuote,
+            )?;
+
+            (
+                pool.partner,
+                pool.token_a_mint,
+                pool.token_a_vault,
+                pool.token_b_vault,
+            )
+        };
 
         require_keys_eq!(
-            pool.partner,
+            pool_partner,
             Pubkey::default(),
             HonoraryQuoteFeeError::UnsupportedPartnerPool
         );
@@ -69,14 +77,14 @@ pub mod honorary_quote_fee {
             HonoraryQuoteFeeError::CreatorAtaMintMismatch
         );
 
-        let pool_base_mint = Pubkey::new_from_array(pool.token_a_mint.to_bytes());
+        let pool_base_mint = Pubkey::new_from_array(pool_token_a_mint.to_bytes());
         require_keys_eq!(
             pool_base_mint,
             ctx.accounts.base_mint.key(),
             HonoraryQuoteFeeError::BaseMintMismatch
         );
-        let pool_base_vault = Pubkey::new_from_array(pool.token_a_vault.to_bytes());
-        let pool_quote_vault = Pubkey::new_from_array(pool.token_b_vault.to_bytes());
+        let pool_base_vault = Pubkey::new_from_array(pool_token_a_vault.to_bytes());
+        let pool_quote_vault = Pubkey::new_from_array(pool_token_b_vault.to_bytes());
         require_keys_eq!(
             pool_base_vault,
             ctx.accounts.base_vault.key(),
@@ -120,7 +128,6 @@ pub mod honorary_quote_fee {
         progress.investor_distributed = 0;
         progress.carry_quote = 0;
         progress.day_open = false;
-        progress.bump = ctx.bumps.progress;
 
         Ok(())
     }
@@ -138,24 +145,39 @@ pub mod honorary_quote_fee {
             HonoraryQuoteFeeError::HonoraryPositionAlreadyConfigured
         );
 
-        let position_data = ctx.accounts.position.try_borrow_data()?;
-        let mut position_bytes: &[u8] = &position_data;
-        let position = DammPosition::deserialize(&mut position_bytes)
-            .map_err(|_| error!(HonoraryQuoteFeeError::InvalidPositionAccount))?;
+        let (
+            position_pool,
+            fee_a_pending,
+            fee_b_pending,
+            unlocked_liquidity,
+            vested_liquidity,
+            permanent_locked_liquidity,
+        ) = {
+            let position_data = ctx.accounts.position.try_borrow_data()?;
+            let position = DammPosition::deserialize(&position_data)
+                .ok_or_else(|| error!(HonoraryQuoteFeeError::InvalidPositionAccount))?;
+
+            (
+                position.pool,
+                position.fee_a_pending,
+                position.fee_b_pending,
+                position.unlocked_liquidity,
+                position.vested_liquidity,
+                position.permanent_locked_liquidity,
+            )
+        };
 
         require_keys_eq!(
-            position.pool,
+            position_pool,
             policy.pool,
             HonoraryQuoteFeeError::PositionPoolMismatch
         );
         require!(
-            position.fee_a_pending == 0 && position.fee_b_pending == 0,
+            fee_a_pending == 0 && fee_b_pending == 0,
             HonoraryQuoteFeeError::PositionHasUnclaimedFees
         );
         require!(
-            position.unlocked_liquidity == 0
-                && position.vested_liquidity == 0
-                && position.permanent_locked_liquidity == 0,
+            unlocked_liquidity == 0 && vested_liquidity == 0 && permanent_locked_liquidity == 0,
             HonoraryQuoteFeeError::PositionNotEmpty
         );
 
@@ -226,15 +248,14 @@ pub mod honorary_quote_fee {
         params: CrankQuoteFeeParams,
     ) -> Result<()> {
         // Work around lifetime issues by transmuting the context
-        let ctx: Context<'_, '_, '_, '_, CrankQuoteFeeDistribution<'_>> = unsafe {
-            std::mem::transmute(ctx)
-        };
+        let ctx: Context<'_, '_, '_, '_, CrankQuoteFeeDistribution<'_>> =
+            unsafe { std::mem::transmute(ctx) };
         let clock = Clock::get()?;
         let now_ts = clock.unix_timestamp;
         require!(now_ts >= 0, HonoraryQuoteFeeError::InvalidTimestamp);
 
         let policy = &mut ctx.accounts.policy;
-        let progress = &mut ctx.accounts.progress;
+        let mut progress = load_progress(&ctx.accounts.progress)?;
 
         require!(
             (policy.status & state::PolicyStatus::HONORARY_READY) != 0,
@@ -263,42 +284,31 @@ pub mod honorary_quote_fee {
             HonoraryQuoteFeeError::UnexpectedPageCursor
         );
 
-        let quote_before = ctx.accounts.quote_treasury.amount;
-        let base_before = ctx.accounts.base_fee_check.amount;
-
-        let cp_amm_program_info = ctx.accounts.cp_amm_program.to_account_info();
-        let pool_info = ctx.accounts.pool.to_account_info();
-        let pool_authority_info = ctx.accounts.pool_authority.to_account_info();
-        let position_info = ctx.accounts.position.to_account_info();
-        let token_program_a_info = ctx.accounts.token_program_a.to_account_info();
-        let token_program_b_info = ctx.accounts.token_program_b.to_account_info();
-        let event_authority_info = ctx.accounts.event_authority.to_account_info();
+        let quote_before = token_account_amount(&ctx.accounts.quote_treasury)?;
+        let base_before = token_account_amount(&ctx.accounts.base_fee_check)?;
 
         cp_amm::invoke_claim_position_fee(
             policy.key(),
             &ctx.accounts.honorary_position,
-            &cp_amm_program_info,
-            &pool_info,
-            &pool_authority_info,
-            &position_info,
-            &ctx.accounts.base_fee_check,
-            &ctx.accounts.quote_treasury,
-            &ctx.accounts.base_vault,
-            &ctx.accounts.quote_vault,
-            &ctx.accounts.base_mint,
-            &ctx.accounts.quote_mint,
-            &ctx.accounts.position_nft_account,
+            &ctx.accounts.cp_amm_program.to_account_info(),
+            &ctx.accounts.pool.to_account_info(),
+            &ctx.accounts.pool_authority.to_account_info(),
+            &ctx.accounts.position.to_account_info(),
+            &ctx.accounts.base_fee_check.to_account_info(),
+            &ctx.accounts.quote_treasury.to_account_info(),
+            &ctx.accounts.base_vault.to_account_info(),
+            &ctx.accounts.quote_vault.to_account_info(),
+            &ctx.accounts.base_mint.to_account_info(),
+            &ctx.accounts.quote_mint.to_account_info(),
+            &ctx.accounts.position_nft_account.to_account_info(),
             &ctx.accounts.honorary_position.to_account_info(),
-            &token_program_a_info,
-            &token_program_b_info,
-            &event_authority_info,
+            &ctx.accounts.token_program_a.to_account_info(),
+            &ctx.accounts.token_program_b.to_account_info(),
+            &ctx.accounts.event_authority.to_account_info(),
         )?;
 
-        ctx.accounts.quote_treasury.reload()?;
-        ctx.accounts.base_fee_check.reload()?;
-
-        let quote_after = ctx.accounts.quote_treasury.amount;
-        let base_after = ctx.accounts.base_fee_check.amount;
+        let quote_after = token_account_amount(&ctx.accounts.quote_treasury)?;
+        let base_after = token_account_amount(&ctx.accounts.base_fee_check)?;
 
         let quote_claimed = quote_after
             .checked_sub(quote_before)
@@ -321,74 +331,44 @@ pub mod honorary_quote_fee {
             policy.pool,
         )?;
 
-        let investor_count = investors.len() as u32;
+        let plan = build_investor_payout_plan(
+            investors,
+            progress.claimed_quote,
+            progress.investor_distributed,
+            progress.carry_quote,
+            policy.y0,
+            policy.investor_fee_share_bps,
+            policy.daily_cap_quote,
+            policy.min_payout_lamports,
+        )?;
+        let InvestorPayoutPlan {
+            transfers,
+            investor_count,
+            share_bps,
+            total_paid,
+            target_investor_quote,
+            carry_for_creator,
+            carry_quote_after,
+        } = plan;
+
         require!(
             investor_count > 0 || params.is_last_page,
             HonoraryQuoteFeeError::EmptyPageWithoutLastFlag
         );
-        let max_cursor = if params.max_page_cursor == 0 { u32::MAX } else { params.max_page_cursor };
+        let max_cursor = if params.max_page_cursor == 0 {
+            u32::MAX
+        } else {
+            params.max_page_cursor
+        };
         require!(
             investor_count + progress.page_cursor <= max_cursor,
             HonoraryQuoteFeeError::PageOverflow
         );
 
-        let total_locked: u128 = investors
-            .iter()
-            .map(|entry| entry.locked_amount as u128)
-            .sum();
-        let share_bps = eligible_share_bps(total_locked, policy.y0, policy.investor_fee_share_bps);
-
-        let mut target_investor_quote = u128_to_u64(mul_div_floor_u128(
-            progress.claimed_quote as u128,
-            share_bps as u128,
-            MAX_BASIS_POINTS as u128,
-        )?)?;
-
-        if policy.daily_cap_quote > 0 {
-            target_investor_quote = target_investor_quote.min(policy.daily_cap_quote);
-        }
-
-        let mut available_to_pay = target_investor_quote
-            .saturating_sub(progress.investor_distributed)
-            .saturating_add(progress.carry_quote);
-        let mut carry_for_creator = 0u64;
-        if share_bps == 0 {
-            carry_for_creator = progress.carry_quote;
-            available_to_pay = 0;
-            progress.carry_quote = 0;
-        }
-
-        let mut total_paid_this_page: u64 = 0;
-        let mut transfers: Vec<(u64, usize)> = Vec::with_capacity(investors.len());
-
-        for entry in investors.iter() {
-            if available_to_pay == 0 || entry.locked_amount == 0 {
-                transfers.push((0, entry.token_account_index));
-                continue;
-            }
-
-            let payout_u128 = mul_div_floor_u128(
-                available_to_pay as u128,
-                entry.locked_amount as u128,
-                total_locked.max(1),
-            )?;
-            let mut payout = u128_to_u64(payout_u128)?;
-
-            if payout < policy.min_payout_lamports {
-                payout = 0;
-            }
-
-            transfers.push((payout, entry.token_account_index));
-            total_paid_this_page = total_paid_this_page
-                .checked_add(payout)
-                .ok_or(HonoraryQuoteFeeError::ArithmeticOverflow)?;
-        }
-
-        available_to_pay = available_to_pay.saturating_sub(total_paid_this_page);
-        progress.carry_quote = available_to_pay;
+        progress.carry_quote = carry_quote_after;
         progress.investor_distributed = progress
             .investor_distributed
-            .checked_add(total_paid_this_page)
+            .checked_add(total_paid)
             .ok_or(HonoraryQuoteFeeError::ArithmeticOverflow)?;
 
         let bump = ctx.accounts.honorary_position.bump;
@@ -434,7 +414,7 @@ pub mod honorary_quote_fee {
             day_start_ts: progress.day_start_ts,
             page_start: params.expected_page_cursor,
             investors_processed: investor_count,
-            total_paid_quote: total_paid_this_page,
+            total_paid_quote: total_paid,
             carry_quote: progress.carry_quote,
         });
 
@@ -481,8 +461,188 @@ pub mod honorary_quote_fee {
             progress.page_cursor = 0;
         }
 
+        store_progress(&ctx.accounts.progress, &progress)?;
+
         Ok(())
     }
+}
+
+struct InvestorPayoutPlan {
+    transfers: Vec<(u64, usize)>,
+    investor_count: u32,
+    share_bps: u16,
+    total_paid: u64,
+    target_investor_quote: u64,
+    carry_for_creator: u64,
+    carry_quote_after: u64,
+}
+
+#[inline(never)]
+fn build_investor_payout_plan(
+    investors: Vec<InvestorEntry>,
+    claimed_quote: u64,
+    investor_distributed: u64,
+    carry_quote: u64,
+    y0: u64,
+    investor_fee_share_bps: u16,
+    daily_cap_quote: u64,
+    min_payout_lamports: u64,
+) -> Result<InvestorPayoutPlan> {
+    let investor_count_u32 = u32::try_from(investors.len())
+        .map_err(|_| error!(HonoraryQuoteFeeError::ArithmeticOverflow))?;
+
+    let total_locked: u128 = investors
+        .iter()
+        .map(|entry| entry.locked_amount as u128)
+        .sum();
+    let share_bps = eligible_share_bps(total_locked, y0, investor_fee_share_bps);
+
+    let mut target_investor_quote = u128_to_u64(mul_div_floor_u128(
+        claimed_quote as u128,
+        share_bps as u128,
+        MAX_BASIS_POINTS as u128,
+    )?)?;
+
+    if daily_cap_quote > 0 {
+        target_investor_quote = target_investor_quote.min(daily_cap_quote);
+    }
+
+    let mut available_to_pay = target_investor_quote
+        .saturating_sub(investor_distributed)
+        .saturating_add(carry_quote);
+    let mut carry_for_creator = 0u64;
+    if share_bps == 0 {
+        carry_for_creator = carry_quote;
+        available_to_pay = 0;
+    }
+
+    let mut total_paid_this_page: u64 = 0;
+    let mut transfers: Vec<(u64, usize)> = Vec::with_capacity(investors.len());
+
+    for entry in investors.iter() {
+        if available_to_pay == 0 || entry.locked_amount == 0 {
+            transfers.push((0, entry.token_account_index));
+            continue;
+        }
+
+        let payout_u128 = mul_div_floor_u128(
+            available_to_pay as u128,
+            entry.locked_amount as u128,
+            total_locked.max(1),
+        )?;
+        let mut payout = u128_to_u64(payout_u128)?;
+
+        if payout < min_payout_lamports {
+            payout = 0;
+        }
+
+        transfers.push((payout, entry.token_account_index));
+        total_paid_this_page = total_paid_this_page
+            .checked_add(payout)
+            .ok_or(HonoraryQuoteFeeError::ArithmeticOverflow)?;
+    }
+
+    let carry_quote_after = if share_bps == 0 {
+        0
+    } else {
+        available_to_pay.saturating_sub(total_paid_this_page)
+    };
+
+    Ok(InvestorPayoutPlan {
+        transfers,
+        investor_count: investor_count_u32,
+        share_bps,
+        total_paid: total_paid_this_page,
+        target_investor_quote,
+        carry_for_creator,
+        carry_quote_after,
+    })
+}
+
+#[inline(never)]
+fn token_account_amount(account: &UncheckedAccount<'_>) -> Result<u64> {
+    require_keys_eq!(
+        *account.owner,
+        anchor_spl::token::ID,
+        HonoraryQuoteFeeError::InvalidTokenAccount
+    );
+
+    let amount = {
+        let data_ref = account
+            .try_borrow_data()
+            .map_err(|_| error!(HonoraryQuoteFeeError::InvalidTokenAccount))?;
+        let mut data_slice: &[u8] = &data_ref;
+        let token_account = TokenAccount::try_deserialize(&mut data_slice)
+            .map_err(|_| error!(HonoraryQuoteFeeError::InvalidTokenAccount))?;
+        token_account.amount
+    };
+
+    Ok(amount)
+}
+
+#[inline(never)]
+fn load_progress(account: &UncheckedAccount<'_>) -> Result<DistributionProgress> {
+    let progress = {
+        let data_ref = account
+            .try_borrow_data()
+            .map_err(|_| error!(HonoraryQuoteFeeError::InvalidProgressAccount))?;
+        let mut data_slice: &[u8] = &data_ref;
+        DistributionProgress::try_deserialize(&mut data_slice)
+            .map_err(|_| error!(HonoraryQuoteFeeError::InvalidProgressAccount))?
+    };
+
+    Ok(progress)
+}
+
+#[inline(never)]
+fn store_progress(account: &UncheckedAccount<'_>, progress: &DistributionProgress) -> Result<()> {
+    let mut data_ref = account
+        .try_borrow_mut_data()
+        .map_err(|_| error!(HonoraryQuoteFeeError::InvalidProgressAccount))?;
+    progress
+        .try_serialize(&mut (&mut data_ref[..]))
+        .map_err(|_| error!(HonoraryQuoteFeeError::InvalidProgressAccount))?;
+    Ok(())
+}
+
+#[cfg(any(target_arch = "bpfel", target_arch = "bpfeb"))]
+#[no_mangle]
+pub extern "Rust" fn __getrandom_v03_custom(
+    dest: *mut u8,
+    len: usize,
+) -> Result<(), getrandom::Error> {
+    use core::{cmp, slice};
+    use solana_program::{clock::Clock, hash::hash, sysvar::Sysvar};
+
+    if len == 0 {
+        return Ok(());
+    }
+
+    let mut seed = [0u8; 32];
+
+    if let Ok(clock) = Clock::get() {
+        seed[..8].copy_from_slice(&clock.slot.to_le_bytes());
+        seed[8..16].copy_from_slice(&clock.unix_timestamp.to_le_bytes());
+    } else {
+        seed[..8].copy_from_slice(&len.to_le_bytes());
+    }
+
+    let mut digest = hash(&seed).to_bytes();
+    let buf = unsafe { slice::from_raw_parts_mut(dest, len) };
+
+    let mut offset = 0usize;
+    while offset < len {
+        let remaining = len - offset;
+        let copy_len = cmp::min(remaining, digest.len());
+        buf[offset..offset + copy_len].copy_from_slice(&digest[..copy_len]);
+        offset += copy_len;
+
+        if offset < len {
+            digest = hash(&digest).to_bytes();
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
@@ -585,8 +745,9 @@ pub struct ConfigureHonoraryPosition<'info> {
 
 #[derive(Accounts)]
 pub struct CrankQuoteFeeDistribution<'info> {
-    /// Any signer to satisfy authorization lint; permissionless crank otherwise
-    pub cranker: Signer<'info>,
+    /// CHECK: Only used to ensure a signature is present
+    #[account(signer)]
+    pub cranker: UncheckedAccount<'info>,
     #[account(mut)]
     pub policy: Account<'info, Policy>,
     #[account(
@@ -595,14 +756,18 @@ pub struct CrankQuoteFeeDistribution<'info> {
         bump = honorary_position.bump,
     )]
     pub honorary_position: Account<'info, HonoraryPosition>,
-    #[account(mut, seeds = [PROGRESS_SEED, policy.pool.as_ref()], bump = progress.bump)]
-    pub progress: Account<'info, DistributionProgress>,
+    /// CHECK: Progress account is constrained by seeds and updated manually
+    #[account(mut, seeds = [PROGRESS_SEED, policy.pool.as_ref()], bump)]
+    pub progress: UncheckedAccount<'info>,
+    /// CHECK: Account is constrained to the policy's configured quote treasury
     #[account(mut, address = policy.quote_treasury)]
-    pub quote_treasury: Account<'info, TokenAccount>,
+    pub quote_treasury: UncheckedAccount<'info>,
+    /// CHECK: Account is constrained to the policy's configured base fee check treasury
     #[account(mut, address = policy.base_fee_check)]
-    pub base_fee_check: Account<'info, TokenAccount>,
+    pub base_fee_check: UncheckedAccount<'info>,
+    /// CHECK: Account is constrained to the policy's configured creator quote ATA
     #[account(mut, address = policy.creator_quote_ata)]
-    pub creator_quote_ata: Account<'info, TokenAccount>,
+    pub creator_quote_ata: UncheckedAccount<'info>,
     /// CHECK: DAMM pool account
     #[account(address = policy.pool)]
     pub pool: UncheckedAccount<'info>,
@@ -612,14 +777,19 @@ pub struct CrankQuoteFeeDistribution<'info> {
     /// CHECK: DAMM position account
     #[account(mut, address = policy.position)]
     pub position: UncheckedAccount<'info>,
+    /// CHECK: Account is constrained to the policy's configured position NFT token account
     #[account(mut, address = policy.position_nft_account)]
-    pub position_nft_account: Account<'info, TokenAccount>,
+    pub position_nft_account: UncheckedAccount<'info>,
+    /// CHECK: Account is constrained to the policy's configured base vault
     #[account(mut, address = policy.base_vault)]
-    pub base_vault: Account<'info, TokenAccount>,
+    pub base_vault: UncheckedAccount<'info>,
+    /// CHECK: Account is constrained to the policy's configured quote vault
     #[account(mut, address = policy.quote_vault)]
-    pub quote_vault: Account<'info, TokenAccount>,
-    pub base_mint: Account<'info, Mint>,
-    pub quote_mint: Account<'info, Mint>,
+    pub quote_vault: UncheckedAccount<'info>,
+    /// CHECK: Account address is enforced via the policy
+    pub base_mint: UncheckedAccount<'info>,
+    /// CHECK: Account address is enforced via the policy
+    pub quote_mint: UncheckedAccount<'info>,
     /// CHECK: DAMM event authority
     pub event_authority: UncheckedAccount<'info>,
     /// CHECK: DAMM program id

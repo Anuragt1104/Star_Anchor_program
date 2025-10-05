@@ -60,6 +60,10 @@ pub enum HonoraryQuoteFeeError {
     InvestorAtaOwnerMismatch,
     #[msg("Investor token account mint mismatch")]
     InvestorAtaMintMismatch,
+    #[msg("Invalid token account data")]
+    InvalidTokenAccount,
+    #[msg("Invalid progress account data")]
+    InvalidProgressAccount,
     #[msg("Creator quote ATA mint mismatch")]
     CreatorAtaMintMismatch,
     #[msg("Day not initialized")]

@@ -4,6 +4,10 @@ members = [
 ]
 resolver = "2"
 
+[patch.crates-io]
+carbon-meteora-damm-v2-decoder = { path = "patches/carbon-meteora-damm-v2-decoder" }
+
+
 [profile.release]
 overflow-checks = true
 lto = "fat"

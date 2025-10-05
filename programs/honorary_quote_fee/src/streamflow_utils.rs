@@ -10,6 +10,7 @@ pub struct InvestorEntry {
     pub token_account_index: usize,
 }
 
+#[inline(never)]
 pub fn collect_investors<'info>(
     now: u64,
     accounts: &'info [AccountInfo<'info>],
@@ -83,12 +84,14 @@ pub fn collect_investors<'info>(
     Ok(investors)
 }
 
+#[inline(never)]
 pub fn load_stream_contract(account_info: &AccountInfo<'_>) -> Result<Contract> {
     let data = account_info.try_borrow_data()?;
     Contract::try_from_slice(&data)
         .map_err(|_| error!(HonoraryQuoteFeeError::InvalidInvestorAccount))
 }
 
+#[inline(never)]
 pub fn locked_amount(contract: &Contract, now: u64) -> Result<u64> {
     let unlocked_now = contract
         .amount_withdrawn
